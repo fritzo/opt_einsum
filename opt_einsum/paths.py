@@ -41,12 +41,9 @@ def optimal(input_sets, output_set, idx_dict, memory_limit):
     for iteration in range(len(input_sets) - 1):
         iter_results = []
 
-        # Compute all unique pairs
-        comb_iter = tuple(itertools.combinations(range(len(input_sets) - iteration), 2))
-
         for curr in full_results:
             cost, positions, remaining = curr
-            for con in comb_iter:
+            for con in itertools.combinations(range(len(input_sets) - iteration), 2):
 
                 # Find the contraction
                 contract = helpers.find_contraction(con, remaining, output_set)
@@ -70,9 +67,6 @@ def optimal(input_sets, output_set, idx_dict, memory_limit):
             path = min(full_results, key=lambda x: x[0])[1]
             path += [tuple(range(len(input_sets) - iteration))]
             return path
-
-        # Update list to iterate over
-        full_results = iter_results
 
     # If we have not found anything return single einsum contraction
     if len(full_results) == 0:

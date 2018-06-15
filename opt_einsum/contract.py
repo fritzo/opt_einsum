@@ -175,21 +175,14 @@ def contract_path(*operands, **kwargs):
     # Compute naive cost
     # This isnt quite right, need to look into exactly how einsum does this
     # indices_in_input = input_subscripts.replace(',', '')
-    # inne
     inner_product = (sum(len(x) for x in input_sets) - len(indices)) > 0
     naive_cost = helpers.flop_count(indices, inner_product, len(input_list), dimension_dict)
 
     # Compute the path
     if not isinstance(path_type, str):
         path = path_type
-    elif len(input_list) == 1:
-        # Nothing to be optimized
-        path = [(0, )]
-    elif len(input_list) == 2:
-        # Nothing to be optimized
-        path = [(0, 1)]
-    elif indices == output_set:
-        # If no rank reduction leave it to einsum
+    elif (len(input_list) in [1, 2]) or (indices == output_set):
+        # Nothing to be optimized, leave it to einsum
         path = [tuple(range(len(input_list)))]
     elif path_type in ["greedy", "opportunistic"]:
         path = paths.greedy(input_sets, output_set, dimension_dict, memory_arg)
@@ -198,10 +191,7 @@ def contract_path(*operands, **kwargs):
     else:
         raise KeyError("Path name %s not found" % path_type)
 
-    cost_list = []
-    scale_list = []
-    size_list = []
-    contraction_list = []
+    cost_list, scale_list, size_list, contraction_list = [], [], [], []
 
     # Build contraction tuple (positions, gemm, einsum_str, remaining)
     for cnum, contract_inds in enumerate(path):
@@ -225,7 +215,7 @@ def contract_path(*operands, **kwargs):
 
         new_bcast_inds = bcast - idx_removed
 
-        # If were broadcasting, nix blas
+        # If we're broadcasting, nix blas
         if use_blas and not len(idx_removed & bcast):
             do_blas = blas.can_blas(tmp_inputs, out_inds, idx_removed)
         else:
