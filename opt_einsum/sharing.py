@@ -45,7 +45,7 @@ def count_cached_ops(cache):
     """Returns a counter of the types of each op in the cache.
     This is useful for profiling to increase sharing.
     """
-    return Counter(key[0] for key in cache.keys())
+    return Counter(key[0] for key in cache.keys() if not key[0].startswith('_'))
 
 
 def _save_tensors(*tensors):
@@ -57,18 +57,16 @@ def _save_tensors(*tensors):
         cache['tensor', id(tensor)] = tensor
 
 
-def _memoize(keys, fn, *args, **kwargs):
-    """Memoize ``fn(*args, **kwargs)`` using each of a given list of ``keys``.
+def _memoize(key, fn, *args, **kwargs):
+    """Memoize ``fn(*args, **kwargs)`` using the given ``key``.
     Results will be stored in the innermost ``cache`` yielded by
     :func:`shared_intermediates`.
     """
     cache = _SHARING_STACK[-1]
-    for key in keys:
-        if key in cache:
-            return cache[key]
+    if key in cache:
+        return cache[key]
     result = fn(*args, **kwargs)
-    for key in keys:
-        cache[key] = result
+    cache[key] = result
     return result
 
 
@@ -86,7 +84,7 @@ def transpose_cache_wrap(transpose):
         _save_tensors(a)
         axes = tuple(axes)
         key = 'transpose', backend, id(a), axes
-        return _memoize([key], transpose, a, axes, backend=backend)
+        return _memoize(key, transpose, a, axes, backend=backend)
 
     return cached_transpose
 
@@ -107,9 +105,20 @@ def tensordot_cache_wrap(tensordot):
             axes = list(range(len(x.shape)))[len(x.shape) - axes:], list(range(len(y.shape)))[:axes]
         axes = tuple(axes[0]), tuple(axes[1])
         key = 'tensordot', backend, id(x), id(y), axes
-        return _memoize([key], tensordot, x, y, axes, backend=backend)
+        return _memoize(key, tensordot, x, y, axes, backend=backend)
 
     return cached_tensordot
+
+
+def _einsum_hash(args):
+    # hash modulo commutativity by computing a canonical ordering and names
+    inputs, output, operands = parse_einsum_input(args)
+    inputs = inputs.split(',')
+    canonical = sorted(zip(inputs, map(id, operands)), key=lambda x: x[1])
+    canonical_ids = tuple(id_ for _, id_ in canonical)
+    canonical_inputs = ','.join(input_ for input_, _ in canonical)
+    canonical_equation = alpha_canonicalize(canonical_inputs + "->" + output)
+    return canonical_equation, canonical_ids
 
 
 def einsum_cache_wrap(einsum):
@@ -122,24 +131,13 @@ def einsum_cache_wrap(einsum):
         if not _SHARING_STACK:
             return einsum(*args, **kwargs)
 
-        # first try cheap exact hash with no commutativity
-        backend = kwargs.pop('backend', 'numpy')
         equation = args[0]
-        key1 = 'einsum', backend, equation, tuple(map(id, args[1:]))
-        cache = _SHARING_STACK[-1]
-        if key1 in cache:
-            return cache[key1]
-
-        # hash modulo commutativity by computing a canonical ordering and names
-        inputs, output, operands = parse_einsum_input(args)
-        inputs = inputs.split(',')
+        operands = args[1:]
         _save_tensors(*operands)
-        canonical = sorted(zip(inputs, map(id, operands)), key=lambda x: x[1])
-        canonical_ids = tuple(id_ for _, id_ in canonical)
-        canonical_inputs = ','.join(input_ for input_, _ in canonical)
-        canonical_equation = alpha_canonicalize(canonical_inputs + "->" + output)
-        key2 = 'einsum', backend, canonical_equation, canonical_ids
-        return _memoize([key1, key2], einsum, equation, *operands, backend=backend)
+        backend = kwargs.pop('backend', 'numpy')
+        cheap_key = '_einsum_hash', equation, tuple(map(id, operands))
+        key = 'einsum', backend, _memoize(cheap_key, _einsum_hash, args)
+        return _memoize(key, einsum, equation, *operands, backend=backend)
 
     return cached_einsum
 
@@ -156,6 +154,6 @@ def to_backend_cache_wrap(to_backend):
 
         # hash by id
         key = to_backend.__name__, id(array)
-        return _memoize([key], to_backend, array)
+        return _memoize(key, to_backend, array)
 
     return cached_to_backend
